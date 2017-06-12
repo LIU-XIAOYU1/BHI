@@ -1,0 +1,222 @@
+simSurvCox <- function(last=5, n=200, beta=c(0.8267, -0.1733),
+                 gamma=c(-1,1.5,0.5),h=1, h.censor=1/3.57){
+
+    z=rep(c(0.5,-0.5),n/2)
+    x <- runif(n, 0, 10)
+
+    pcure=(1+exp(-gamma[1]-gamma[2]*z))^-1
+   
+
+    cI=rbinom(n,1,pcure)
+
+    nc <- sum(cI)
+    nn <- n - nc
+    xn <- x[cI==0]
+    zn <- z[cI==0]   
+ 
+    lambda=rep(0,nn)
+
+    for (j in 1: nn){  
+    
+      lambda[j]= beta[1]*zn[j]+beta[2]*xn[j]
+    }
+
+        y1_uncured <- rexp(nn, h*exp(lambda))
+        y1 <- c( rep(Inf, nc), y1_uncured)
+
+        #--t is censoring distribution
+        t <- rexp(n, h.censor)
+        yc <- ifelse(t<last, t, last)
+        #--y is observed time
+        y <- ifelse(y1<=yc, y1, yc)
+        #--d is the censoring indicator
+        d <- ifelse(y<yc, 1, 0)
+        
+    list(y=y, d=d, x=c(x[cI==1],xn), nc=nc, z=c(z[cI==1],zn))
+
+ }
+
+
+####----------likelihood like winbugs example--------------------------
+#logpostC is the log of posterior likelihood
+# R[i,j]=1 if the patient i at risk in interval j, ([t[j],t[j+1])
+# D[i,j]=1 if the patient i dead in interval j, (t[j],t[j+1])
+# beta: parameter in x^'\beta
+# h[j]: hazard rate at interval j
+# mu0, sigma20: prior for beta
+# X is a matrix
+logpostC <- function(R, D, X, beta, h){
+
+    H <- outer(as.vector(exp(X%*%beta)), h,  "*") * R
+    ein1 <-  -sum(H)
+    ein2 <- sum(log(H) * D, na.rm=TRUE)
+
+    p <- ein1 + ein2 
+    p
+}
+
+
+
+updateBetaMH_mul <- function(R, D, X, h, beta, mu0=0, sigma20=100, covbB){
+
+
+      l=ncol(X)  
+  
+      beta.new<-c(beta + rmvt(1,sigma=covbB,l))  
+    
+      # Log Prior
+      lpold<-dmvnorm(beta,rep(mu0,l),diag(sigma20,l),log=T)		    # Old Log Prior
+      lpnew<-dmvnorm(beta.new,rep(mu0,l),diag(sigma20,l),log=T)        # New Log Prior
+
+      # Log Likelihoods
+        lold<-logpostC(R, D, X, beta, h)
+        lnew<-logpostC(R, D, X, beta.new, h)
+ 
+      # MH Acceptance Ratio on Log Scale
+      ratio<-(lnew+lpnew)-(lold+lpold)
+      accept <- 0
+      if (is.na(ratio)==FALSE) {
+        if(log(runif(1))<ratio) {
+            beta <- beta.new
+            accept<-1 
+        }
+       }
+
+   list(beta=beta,accept=accept)
+}
+
+
+
+#metropolis-hastings for cure
+updateCureMH <- function(Z, v, gamma, mu0, sigma20=100, covbG){
+
+      Xi=cbind(rep(1,nrow(Z)),Z)
+      l=ncol(Xi)    
+      gamma.new<-c(gamma + rmvt(1,sigma=covbG,l))      
+
+      # Log Prior
+      lpold<-dmvnorm(gamma,rep(mu0,l),diag(sigma20,l),log=T)		# Old Log Prior
+      lpnew<-dmvnorm(gamma.new,rep(mu0,l),diag(sigma20,l),log=T)        # New Log Prior
+
+      # Old and New Class Probabilities
+        etaold<-Xi%*%gamma
+        pold<-exp(etaold)/(1+exp(etaold))
+        etanew<-Xi%*%gamma.new
+        pnew<-exp(etanew)/(1+exp(etanew))
+
+      # Log Likelihoods
+        lold<-sum(log(1-pold[v==1]))+sum(log(pold[v==0]))	
+        lnew<-sum(log(1-pnew[v==1]))+sum(log(pnew[v==0]))
+        
+        lold<-sum(v*log(pold)+(1-v)*log(1-pold))
+ 
+      # MH Acceptance Ratio on Log Scale
+      ratio<-(lnew+lpnew)-(lold+lpold)
+    
+      accept <- 0
+     if (is.na(ratio)==FALSE) {
+        if(log(runif(1))<ratio) {
+            gamma <- gamma.new
+            accept<-1 
+        }
+      }
+   list(gamma=gamma,accept=accept)
+}
+
+
+# niter: number of iterations
+# mu0: mean of prior of beta
+# sigma20: variance of prior of beta
+# c0, eta0: parameters for gamma process
+# type: the type of updating change point
+survCoxChange <- function(X, Z, y, d, niter=10, mu0=0, sigma20=100,
+                          c0=0.1, eta=0.1, k0=1, alpha0=1, beta0=1, burn=10000/4, type){
+    
+  #niter=15000; mu0=0; sigma20=100;k=1;c0=0.1; eta=0.1; alpha0=1; beta0=1
+    #obtain the number of intervals
+    s <- sort(c(unique(y[d==1]), max(y)))
+    J <- length(s)-1
+    
+    #obtain D, R matrices
+    D <- R  <- matrix(0, nrow=length(y), ncol=J)
+    D <- do.call(cbind, lapply(1:J, function(j)
+                               (s[j] <= y) * (y < s[j+1]) * (d == 1)))
+    R <- do.call(cbind, lapply(1:J, function(j) ifelse(s[j] <= y, 1, 0)))
+    R <- structure(as.integer(R), dim = dim(R))
+
+    #intial for h based on obs
+    h.init <- colSums(D)/colSums(R)
+
+    #assign initial values
+    n=length(y)
+    S.save <- lam.save<- matrix(0.5, nrow=niter+1, ncol=n)
+    h.save <- matrix(0, nrow=niter+1, ncol=J)
+    h.save[1,] <- h.init
+    # intial value of v not been used
+    c.save <- v.save <- matrix(1, nrow=niter+1, ncol=n)
+    beta.save <- matrix(0, nrow=niter+1, ncol=ncol(X))
+    gamma.save <- matrix(0, nrow=niter+1, ncol=ncol(Z)+1)
+    covbB<-diag(0.1,ncol(X)) # proposal in survival
+    covbG<-diag(0.1,ncol(Z)+1) # proposal in logistic
+    acceptG <- acceptB<- rep(0, niter)
+    ObsLike <- matrix(0, nrow=niter, ncol=n)
+
+    for (k in 1:niter){
+
+        # update beta
+        choose <-  v.save[k,] ==1
+
+        if (k >= 2*burn) covbB<-cov(matrix(beta.save[(burn+1):(2*burn),],ncol=ncol(X)))
+        fbeta <- updateBetaMH_mul(R=R[choose,], D=D[choose,],
+                               X=matrix(X[choose,],ncol=ncol(X)), h.save[k,], mu0, sigma20,
+                               beta=beta.save[k,],covbB)
+       
+        beta.new <- fbeta$beta
+
+        acceptB[k] <- fbeta$accept
+        beta.save[k+1,] <- beta.new
+
+        # update h                                
+        sD <- colSums(D[choose,])
+       # ds <- diff(s^k0)  
+        ds <- diff(s)       
+        alpha.c <- c0*eta*ds + sD
+
+        cova=as.vector(exp(X%*%beta.new))
+        beta.c <- c0 + colSums((R*cova)[choose,])                          
+        h.new <- rgamma(J, alpha.c, rate=beta.c) 
+        h.save[k+1,] <- h.new
+
+
+         # update gamma
+         if (k >= 2*burn) covbG<-cov(gamma.save[(burn+1):(2*burn),])
+         fc <- updateCureMH(Z, v.save[k,], gamma.save[k,], mu0, sigma20, covbG)
+         acceptG[k] <- fc$accept
+         gamma.new<-fc$gamma
+         gamma.save[k+1,] <- gamma.new
+         c.save[k+1,]<- c.new <- (1+exp(-gamma.new[1]-Z%*%gamma.new[-1]))^-1
+
+        # update v 
+         S.save[k+1,]<-S <- exp(-R%*%h.new)^cova
+         lam.save[k+1,]<- lam<- D%*%h.new*cova ## hazard
+         p_v <- (1-c.new) * S / (c.new + (1-c.new) * S)
+         v_temp <- rbinom(rep(1,n), rep(1,n), p_v)
+         v.tem1 <- ifelse(d==0, v_temp, 1)
+         v.new <- ifelse(y>max(s[-length(s)]),0, v.tem1)
+        
+         v.save[k+1,] <- v.new 
+
+         #H.new <- outer(cova, h.new,  "*") * R
+
+        ObsLike[k,] <- ((1-c.new)*lam*S)^d*(c.new+(1-c.new)*S)^(1-d) 
+        #ObsLike[k,] <- ((1-c.new)*exp(rowSums(log(H.new)*D-H.new,na.rm=TRUE)))^d *(c.new+(1-c.new)*exp(-rowSums(H.new)))^(1-d)
+       # print(ObsLike[k,])
+      if (k %% 1000 == 0){
+            cat(paste(k, " iterations", " have finished.\n", sep=""))
+        }
+    }
+
+    list(beta.save=beta.save, h.save=h.save,c.save=c.save, ObsLike=ObsLike,
+ S.save=S.save, lam.save=lam.save,gamma.save=gamma.save,accept.all=cbind(acceptB,acceptG))
+}
+
