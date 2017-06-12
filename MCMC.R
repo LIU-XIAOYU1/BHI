@@ -1,5 +1,6 @@
 library(HI)
-function(xcov,Z,L,R,status,k,niter=10,burn=)
+library(mvtnorm)
+function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
 {
   # help function
   Ispline <- function(x, order, knots) {
@@ -71,8 +72,44 @@ function(xcov,Z,L,R,status,k,niter=10,burn=)
     tt<-sum(xx[,j]*x*te1)-sum(exp(xx%*%beta)*te2)-x^2/sigma.beta^2/2
     return(tt)
   }
-  ind_fun<-function()
-  alpha_fun<-function()
+  ind_fun<-function(x,beta,xx,sigma.beta,te1,te2,cof_range)
+    (x > -cof_range)*(x > cof_range)
+  
+  
+  #metropolis-hastings for cure
+  # t distribution
+  alpha_fun<-function(X,u,alpha,alpha_0,sigma.alpha,covG)
+  {
+    Z<-cbind(1,X)
+    l<-ncol(Z)
+    alpha.new<-c(alpha+rmvt(1,sigma =covG,l))
+    
+    #log prior, multivariate normal distribution
+    lpold<-dmvnorm(alpha,mean=rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
+    lpnew<-dmvnorm(alpha.new,mean = rep(alpha,l),sigma = diag(sigma.alpha,l),log = T)
+    
+    #cure rate
+    
+    piold<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
+    pinew<-exp(Z%*%alpha.new)/(1+exp(Z%*%alpha.new))
+    
+    lold<-sum(u*piold+(1-u)*(1-piold))
+    lnew<-sum(u*pinew+(1-u)*(1-pinew))
+    
+    ratio<-(lnew+lpnew)-(lold+piold)   #random walk m-h algorithm is symestic
+    U<-runif(1)
+    
+    accept<-0
+    if(is.na(ratio)==FALSE)
+    {
+      if(log(U)<ratio)
+      {
+        alpha<-alpha.new
+        accept<-accept+1
+      }
+    }
+    list(alpha=alpha,accept=accept)
+    }
   
   
   
@@ -89,16 +126,20 @@ function(xcov,Z,L,R,status,k,niter=10,burn=)
   lam.track=matrix(1,nrow = niter+1,ncol=n)
   
   
-  # intial parameters 
+  # intial parameters and hyper parameters
   
   alpha.track[1,]=c(1,1,-1)
   beta.track[1,]=c(1,-1)
   gamma.track[1,]=c(rep(1,k))
   u.track[1,]=c(rep(1,n))
-  sigma.alpha=
+  alpha_0=0                 #prior mean of alpha
+  sigma.alpha=              #prior variance of alpha
+  covG=                     #proposal setting of alpha in t distribution
   sigma.beta=
   lambda=
-    
+  a_lam=
+  b_lam=
+  accepta<-rep(0,niter)
     
   #  data agumentation process 
     
@@ -196,13 +237,41 @@ function(xcov,Z,L,R,status,k,niter=10,burn=)
                      sigma.beta=sigma.beta,te1=te1_new,te2=te2_new)
 
       }
+      
+      beta.track[iter,]<-beta
      
       for(l in 1:k)
       {
-        
+        tempa = 1 + sum(zz[, l] * as.numeric(status_new == 0) * 
+                          (bisu_new[l, ] > 0) + ww[, l] * as.numeric(status_new == 
+                                                                   1) * ((bisv_new[l, ] - bisu_new[l, ]) > 0))
+        tempb = lambda + sum((bisu_new[l, ] * as.numeric(status_new == 
+                                                    0) + bisv_new[l, ] * as.numeric(status_new == 1) + bisv_new[l, 
+                                                                                                    ] * as.numeric(status_new == 2)) * exp(x_new %*% beta))
+        gamcoef[l] = rgamma(1, tempa, rate = tempb)
       }
      
      
+     lam<-rgamma(1,a_lam+k, b_lam+sum(gamcoef))
+   
+     
+     
+     # sample for alpha #
+     if (iter >= 2*burn) covbG<-cov(gamma.save[(burn+1):(2*burn),])  #????
+     f<-alpha_fun(X=x_new,u=u.track[iter,],alpha=alpha.track[iter,],alpha_0,sigma.alpha,covG)
+     accepta[iter]<-f$accept
+     alpha.track[iter,]<-f$alpha
+    
+     # sample for u 
+     
+     Lamb1=t(gamma.track[iter,]%*%bis1)
+     Lamb2=t(gamma.track[iter,]%*%bis2) # updata the whole Lamb1
+     
+     
+     beta.track[iter,]<-beta
+     gamma.track[iter,]<-gamcoef
+     
+    
      
      
      #update Lamb1 and Lamb2
