@@ -1,6 +1,8 @@
+data<-generate(n,intercept,a1,a2,b1,b2,p,v)
+
 library(HI)
 library(mvtnorm)
-function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
+function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
 {
   # help function
   Ispline <- function(x, order, knots) {
@@ -66,14 +68,14 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
     }
     return(samp)
   }
-  beta_fun<-function(x,beta,xx,sigma.beta,te1,te2)
+  beta_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
   {
     beta[j]<-x
     tt<-sum(xx[,j]*x*te1)-sum(exp(xx%*%beta)*te2)-x^2/sigma.beta^2/2
     return(tt)
   }
-  ind_fun<-function(x,beta,xx,sigma.beta,te1,te2,cof_range)
-    (x > -cof_range)*(x > cof_range)
+  ind_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
+    (x > -cof_range)*(x < cof_range)
   
   
   #metropolis-hastings for cure
@@ -86,7 +88,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
     
     #log prior, multivariate normal distribution
     lpold<-dmvnorm(alpha,mean=rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
-    lpnew<-dmvnorm(alpha.new,mean = rep(alpha,l),sigma = diag(sigma.alpha,l),log = T)
+    lpnew<-dmvnorm(alpha.new,mean = rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
     
     #cure rate
     
@@ -96,7 +98,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
     lold<-sum(u*piold+(1-u)*(1-piold))
     lnew<-sum(u*pinew+(1-u)*(1-pinew))
     
-    ratio<-(lnew+lpnew)-(lold+piold)   #random walk m-h algorithm is symestic
+    ratio<-(lnew+lpnew)-(lold+lpold)   #random walk m-h algorithm is symestic
     U<-runif(1)
     
     accept<-0
@@ -108,45 +110,26 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
         accept<-accept+1
       }
     }
-    list(alpha=alpha,accept=accept)
+     list(alpha=alpha,accept=accept)
     }
+ 
   
+  #  hyper parameter
   
-  
-  
-  
-  # build the track of parameter 
-  
-  
-  n=length(T)
-  alpha.track=matrix(0,nrow = niter+1,ncol = ncol(Z))
-  beta.track=matrix(0,nrow=niter+1,ncol=ncol(X))
-  gamma.track=matrix(1,nrow = niter+1,ncol=k)
-  u.track=matrix(1,nrow = niter+1,ncol = n)
-  lam.track=matrix(1,nrow = niter+1,ncol=n)
-  
-  
-  # intial parameters and hyper parameters
-  
-  alpha.track[1,]=c(1,1,-1)
-  beta.track[1,]=c(1,-1)
-  gamma.track[1,]=c(rep(1,k))
-  u.track[1,]=c(rep(1,n))
+  cof_range=2
   alpha_0=0                 #prior mean of alpha
-  sigma.alpha=              #prior variance of alpha
-  covG=                     #proposal setting of alpha in t distribution
-  sigma.beta=
-  lambda=
-  a_lam=
-  b_lam=
-  accepta<-rep(0,niter)
-    
+  sigma.alpha=100             #prior variance of alpha
+  covG= diag(0.1,ncol(xcov)+1)                    #proposal setting of alpha in t distribution
+  sigma.beta=100
+  a_lam=1
+  b_lam=1
+  
   #  data agumentation process 
     
-   L=matrix(L,ncol=1)
-   R=matrix(ifelse(is.na(R),0,R),ncol = 1)
-   status=matrix(status,ncol = 1)
-   xcov=as.matrix(xcov)
+   L=matrix(data$L,ncol=1)
+   R=matrix(ifelse(is.na(data$R),0,data$R),ncol = 1)
+   status=matrix(data$status,ncol = 1)
+   xcov=as.matrix(cbind(data$z1,data$z2),ncol=2)
    p=ncol(xcov)
    n=nrow(L)
    t1=R*as.numeric(status==0)+L*as.numeric(status==1)
@@ -159,26 +142,36 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
    bis1=Ispline(t(obs[, 1]),order,knots)  # k*n matrix
    bis2=Ispline(t(obs[, 2]),order,knots)
    bisg=Ispline(grids,order,knots)
+   lambda = rgamma(1, a_lam, rate = b_lam)
    gamcoef=matrix(rgamma(k,1,1),ncol = k)
-   beta=matrix(rep(0,p),ncol = 1)
+   #beta=matrix(rep(0,p),ncol = 1)
    Lamb1=t(gamcoef%*%bis1)
-   Lamb2=t(gammcoef%*%bis2)
-   Lambg=t(gammcoef%*%bisg)
+   Lamb2=t(gamcoef%*%bis2)
+   Lambg=t(gamcoef%*%bisg)
    
    
    
    # build the track of parameter 
   
-   n=length(T)
-   alpha.track=matrix(0,nrow = niter+1,ncol = ncol(Z))
-   beta.track=matrix(0,nrow=niter+1,ncol=ncol(X))
+   n=length(L)
+   alpha.track=matrix(0,nrow = niter+1,ncol = ncol(xcov)+1)
+   beta.track=matrix(0,nrow=niter+1,ncol=ncol(xcov))
    gamma.track=matrix(1,nrow = niter+1,ncol=k)
    u.track=matrix(1,nrow = niter+1,ncol = n)
-   lam.track=matrix(1,nrow = niter+1,ncol=n)
-   S.track=matrix(1,nrow = niter,ncol = n)
+   S.track=matrix(1,nrow = niter+1,ncol = n)
+   accepta<-rep(0,niter)
+   
+   # intial parameters 
+   
+   alpha.track[1,]=c(1,1,-1)
+   beta.track[1,]=c(1,-1)
+   gamma.track[1,]=c(rep(1,k))
+   u.track[1,]=c(rep(1,n))
+  
+   
    
    iter=1
-   while(iter<niter+1)
+   for(iter in 1:niter)
    {
     
      choose<-u.track[iter,]==1  #index of u=1
@@ -192,14 +185,13 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
      obs_new=cbind(t1_new,t2_new)
      order=3
      knots=seq(min(obs_new),max(obs_new),length=10)
-     grids=seq(min)
      k=length(knots)-2+order
      bis1_new=Ispline(t(obs_new[, 1]),order,knots)  # k*m matrix
      bis2_new=Ispline(t(obs_new[, 2]),order,knots)
      gamcoef=matrix(rgamma(k,1,1),ncol = k)
      beta=matrix(rep(0,p),ncol = 1)
      Lamb1_new=t(gamcoef%*%bis1_new)
-     Lamb2_new=t(gammcoef%*%bis2_new)
+     Lamb2_new=t(gamcoef%*%bis2_new)
      
      
      
@@ -219,13 +211,13 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
        if(status_new[i]==0){
          templam1=Lamb1_new[i] * exp(x_new[i,]%*%beta)
          v[i]=positivepoissonrnd(templam1)
-         vv[i,]=rmultinom(1,v[i], gamcoef%*% t(bis1_new[,i]))
+         vv[i,]=rmultinom(1,v[i], gamcoef* t(bis1_new[,i]))
        }
       else if(status_new[i]==1)
        {
         templam2=(Lamb2_new[i]-Lamb1_new[i]) * exp(x_new[i,]%*%beta)
-        w[i] = positivepoissonrnd(templam1)
-        ww[i,]=rmultinom(1,w[i],gamcoef%*% t(bis2_new[,i]-bis1_new[,i]))
+        w[i] = positivepoissonrnd(templam2)
+        ww[i,]=rmultinom(1,w[i],gamcoef*t(bis2_new[,i]-bis1_new[,i]))
        }
      }
    
@@ -239,19 +231,20 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
       {
         beta[j]=arms(beta[j],beta_fun,ind_fun,1,
                      xx=matrix(x_new,ncol = ncol(xcov)),beta=beta,j=j,
-                     sigma.beta=sigma.beta,te1=te1_new,te2=te2_new)
+                     sigma.beta=sigma.beta,te1=te1,te2=te2)
 
       }
       
       beta.track[iter,]<-beta
      
+      
       for(l in 1:k)
       {
-        tempa = 1 + sum(zz[, l] * as.numeric(status_new == 0) * 
-                          (bisu_new[l, ] > 0) + ww[, l] * as.numeric(status_new == 
-                                                                   1) * ((bisv_new[l, ] - bisu_new[l, ]) > 0))
-        tempb = lambda + sum((bisu_new[l, ] * as.numeric(status_new == 
-                                                    0) + bisv_new[l, ] * as.numeric(status_new == 1) + bisv_new[l, 
+        tempa = 1 + sum(vv[, l] * as.numeric(status_new == 0) * 
+                          (bis1_new[l, ] > 0) + ww[, l] * as.numeric(status_new == 
+                                                                   1) * ((bis2_new[l, ] - bis1_new[l, ]) > 0))
+        tempb = lambda + sum((bis1_new[l, ] * as.numeric(status_new == 
+                                                    0) + bis2_new[l, ] * as.numeric(status_new == 1) + bis2_new[l, 
                                                                                                     ] * as.numeric(status_new == 2)) * exp(x_new %*% beta))
         gamcoef[l] = rgamma(1, tempa, rate = tempb)
       }
@@ -263,7 +256,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
      
      
      # sample for alpha #
-     if (iter >= 2*burn) covbG<-cov(gamma.save[(burn+1):(2*burn),])  #????
+     if (iter >= 2*burn) covbG<-cov(alpha.track[(burn+1):(2*burn),])  #????
      f<-alpha_fun(X=x_new,u=u.track[iter,],alpha=alpha.track[iter,],alpha_0,sigma.alpha,covG)
      accepta[iter]<-f$accept
      alpha.track[iter,]<-alpha<-f$alpha
@@ -274,14 +267,13 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
      Lamb2=t(gamcoef%*%bis2) # updata the whole Lamb1
      Lambg=t(gamcoef%*%bisg)
      
-     S.track[iter,]<-S<-exp(-Lambg*exp(X%*%beta))
+     S.track[iter,]<-S<-exp(-Lamb1*exp(X%*%beta))
      cure<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
      p_u<-cure*S/(1-cure+cure*S)
      u.temp<-rbinom(rep(1,n),rep(1,n),p_u)
      u.tem1<-ifelse(status==2,u.temp,1)
-     R_max<-(obs*(1-as.numeric(status==2))) 
-     u.new<-ifelse(R>R_max,0,u.tem1)
-     
+     R_max<-max(obs*(1-as.numeric(status==2))) 
+     u.new<-ifelse(L>R_max,0,u.tem1)
      u.track[iter,]<-u.new
      
     
@@ -291,7 +283,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
     }
  
    }
-  list(alpha.track=alpha.track,beta.track=beta.track,gamma.track=gamma.track
+  list(alpha.track=alpha.track,beta.track=beta.track,gamma.track=gamma.track,
        u.track=u.track,S.track=S.track,accept=accepta)  
     
     
