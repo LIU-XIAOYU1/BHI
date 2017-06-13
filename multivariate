@@ -108,7 +108,7 @@ updateCureMH <- function(Z, v, gamma, mu0, sigma20=100, covbG){
         lold<-sum(log(1-pold[v==1]))+sum(log(pold[v==0]))	
         lnew<-sum(log(1-pnew[v==1]))+sum(log(pnew[v==0]))
         
-        lold<-sum(v*log(pold)+(1-v)*log(1-pold))
+        
  
       # MH Acceptance Ratio on Log Scale
       ratio<-(lnew+lpnew)-(lold+lpold)
@@ -204,7 +204,7 @@ survCoxChange <- function(X, Z, y, d, niter=10, mu0=0, sigma20=100,
          v.tem1 <- ifelse(d==0, v_temp, 1)
          v.new <- ifelse(y>max(s[-length(s)]),0, v.tem1)
         
-         v.save[k+1,] <- v.new 
+         v.save[k+1,] <- v.new  
 
          #H.new <- outer(cova, h.new,  "*") * R
 

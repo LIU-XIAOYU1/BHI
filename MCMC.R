@@ -154,13 +154,16 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
    obs=cbind(t1,t2)
    order=3
    knots=seq(min(obs),max(obs),length=10)
+   grids=seq(min(obs),max(obs),length=100)
    k=length(knots)-2+order
    bis1=Ispline(t(obs[, 1]),order,knots)  # k*n matrix
    bis2=Ispline(t(obs[, 2]),order,knots)
+   bisg=Ispline(grids,order,knots)
    gamcoef=matrix(rgamma(k,1,1),ncol = k)
    beta=matrix(rep(0,p),ncol = 1)
    Lamb1=t(gamcoef%*%bis1)
    Lamb2=t(gammcoef%*%bis2)
+   Lambg=t(gammcoef%*%bisg)
    
    
    
@@ -172,6 +175,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
    gamma.track=matrix(1,nrow = niter+1,ncol=k)
    u.track=matrix(1,nrow = niter+1,ncol = n)
    lam.track=matrix(1,nrow = niter+1,ncol=n)
+   S.track=matrix(1,nrow = niter,ncol = n)
    
    iter=1
    while(iter<niter+1)
@@ -188,6 +192,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
      obs_new=cbind(t1_new,t2_new)
      order=3
      knots=seq(min(obs_new),max(obs_new),length=10)
+     grids=seq(min)
      k=length(knots)-2+order
      bis1_new=Ispline(t(obs_new[, 1]),order,knots)  # k*m matrix
      bis2_new=Ispline(t(obs_new[, 2]),order,knots)
@@ -251,6 +256,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
         gamcoef[l] = rgamma(1, tempa, rate = tempb)
       }
      
+     gamma.track[iter,]<-gamcoef
      
      lam<-rgamma(1,a_lam+k, b_lam+sum(gamcoef))
    
@@ -260,23 +266,33 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=)
      if (iter >= 2*burn) covbG<-cov(gamma.save[(burn+1):(2*burn),])  #????
      f<-alpha_fun(X=x_new,u=u.track[iter,],alpha=alpha.track[iter,],alpha_0,sigma.alpha,covG)
      accepta[iter]<-f$accept
-     alpha.track[iter,]<-f$alpha
+     alpha.track[iter,]<-alpha<-f$alpha
     
      # sample for u 
      
-     Lamb1=t(gamma.track[iter,]%*%bis1)
-     Lamb2=t(gamma.track[iter,]%*%bis2) # updata the whole Lamb1
+     Lamb1=t(gamcoef%*%bis1)
+     Lamb2=t(gamcoef%*%bis2) # updata the whole Lamb1
+     Lambg=t(gamcoef%*%bisg)
      
+     S.track[iter,]<-S<-exp(-Lambg*exp(X%*%beta))
+     cure<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
+     p_u<-cure*S/(1-cure+cure*S)
+     u.temp<-rbinom(rep(1,n),rep(1,n),p_u)
+     u.tem1<-ifelse(status==2,u.temp,1)
+     R_max<-(obs*(1-as.numeric(status==2))) 
+     u.new<-ifelse(R>R_max,0,u.tem1)
      
-     beta.track[iter,]<-beta
-     gamma.track[iter,]<-gamcoef
+     u.track[iter,]<-u.new
      
     
-     
-     
-     #update Lamb1 and Lamb2
+    if(iter%%1000==0)
+    {
+      cat(paste(iter, " iterations", " have finished.\n", sep=""))
+    }
+ 
    }
-    
+  list(alpha.track=alpha.track,beta.track=beta.track,gamma.track=gamma.track
+       u.track=u.track,S.track=S.track,accept=accepta)  
     
     
 }
