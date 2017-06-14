@@ -1,137 +1,228 @@
+##### generate data ####
+set.seed(20)
+        
+ ###parameter setting##
+n<-200 
+niter<-100
+burn<-niter/4
+intercept<-1  ###parameter for cure rate##
+a1<-1
+a2<--0.7
+
+b1<--0.5 #### parameter for survival model### b1=-1/b1=-0.5
+b2<--1
+#### examination times ###
+p<-10   # decide the right point
+v<-10  # decide the left point
+order<-3  #decide the order of i spline
+
+generate<-function(n,intercept,a1,a2,b1,b2,p,v)
+{
+  #n sample size
+  #intercept cofficients of cure rate
+  #a1,a2     cofficients of cure rate
+  #b1,b2     cofficients of PH model
+  #p         examination times
+  #v         first generate uniform range
+  #status    censording indicator, 0-left censored,1-interval censored, 2-right censored
+  #L         left point of all objects
+  #R         right point of all objects
+  #Y         nopossible examination time
+  #cure rate indicator
+  z1<-rnorm(n,0,1)  #or normal 
+  z2<-rbinom(n,1,0.5)  
+  linpred<-cbind(1,z1,z2) %*% c(intercept,a1,a2)
+  prob<-exp(linpred)/(1+exp(linpred))
+  y<-rbinom(n=n, size=1, prob=prob)
+  #survival probabilities exponentional(1) and time calculation
+  u<-runif(n,0,1)
+  x<-cbind(z1,z2)
+  time<-qweibull(1-exp(log(u)*exp(-x%*%c(b1,b2))),shape=6,scale=8)
+  #time<-rexp(n,exp(x%*%b1))
+  ###generate examination times####
+  C<-matrix(rep(0,n),ncol = 1)   # all right point of subject
+  status<-matrix(rep(0,n),ncol=1)
+  L<-matrix(rep(0,n),ncol=1)
+  R<-matrix(rep(0,n),ncol=1)
+  for(j in 1:n)
+  { 
+    P<-rpois(1,p)+1   # examination times 
+    Y<-matrix(rep(0,P),ncol =1)
+    Y[1]<-runif(1,0,v)
+    len<-runif(1,1,3)  # decide the length of interval 
+    for (i in 2:P) 
+    {
+      Y[i]<-Y[1]+len*(i-1)  
+    }               
+    C[j]<-Y[P]
+    T<-time*y+C*(1-y) # generate exact failure data
+    if(y[j]==0) #cure fraction
+    {
+      status[j]<-2
+      L[j]<-Y[P]
+      R[j]<-NA    #(L_i,R_i)=(Y_p, infinite)
+    } 
+    if(y[j]==1) #uncure fraction
+    {
+      if(T[j]<Y[1]) 
+      {
+        status[j]<-0
+        L[j]<-0
+        R[j]<-Y[1]
+      } #left censored, (L_j,R_j)=(0, Y_1)
+      
+      if(T[j]>Y[P])
+      {
+        status[j]<-2
+        L[j]<-Y[P]
+        R[j]<-NA
+      }  #right censored,(L_j,R_j)=(Y_p,NA)
+      if(T[j]<Y[P]&T[j]>Y[1])
+      { status[j]<-1 
+      i<-1
+      repeat
+      {
+        i<-i+1
+        if(T[j]<Y[i])
+        {break}
+      }
+      L[j]<-Y[i-1]
+      R[j]<-Y[i]  # find the interval contain T,(L_j,R_j)=(Y_i-1,Y_i)
+      }
+    }
+  }
+  data<-data.frame(T,L,R,status,z1,z2)
+  return(data)
+}
+
 data<-generate(n,intercept,a1,a2,b1,b2,p,v)
 
 library(HI)
 library(mvtnorm)
-function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
-{
-  # help function
-  Ispline <- function(x, order, knots) {
-    k = order + 1
-    m = length(knots)
-    n = m - 2 + k
-    t = c(rep(1, k) * knots[1], knots[2:(m - 1)], rep(1, 
-                                                      k) * knots[m])
-    yy1 = array(rep(0, (n + k - 1) * length(x)), dim = c(n + 
-                                                           k - 1, length(x)))
-    for (l in k:n) {
-      yy1[l, ] = (x >= t[l] & x < t[l + 1])/(t[l + 1] - 
-                                               t[l])
+# help function
+Ispline <- function(x, order, knots) {
+  k = order + 1
+  m = length(knots)
+  n = m - 2 + k
+  t = c(rep(1, k) * knots[1], knots[2:(m - 1)], rep(1, 
+                                                    k) * knots[m])
+  yy1 = array(rep(0, (n + k - 1) * length(x)), dim = c(n + 
+                                                         k - 1, length(x)))
+  for (l in k:n) {
+    yy1[l, ] = (x >= t[l] & x < t[l + 1])/(t[l + 1] - 
+                                             t[l])
+  }
+  yytem1 = yy1
+  for (ii in 1:order) {
+    yytem2 = array(rep(0, (n + k - 1 - ii) * length(x)), 
+                   dim = c(n + k - 1 - ii, length(x)))
+    for (i in (k - ii):n) {
+      yytem2[i, ] = (ii + 1) * ((x - t[i]) * yytem1[i, 
+                                                    ] + (t[i + ii + 1] - x) * yytem1[i + 1, ])/(t[i + 
+                                                                                                    ii + 1] - t[i])/ii
     }
-    yytem1 = yy1
-    for (ii in 1:order) {
-      yytem2 = array(rep(0, (n + k - 1 - ii) * length(x)), 
-                     dim = c(n + k - 1 - ii, length(x)))
-      for (i in (k - ii):n) {
-        yytem2[i, ] = (ii + 1) * ((x - t[i]) * yytem1[i, 
-                                                      ] + (t[i + ii + 1] - x) * yytem1[i + 1, ])/(t[i + 
-                                                                                                      ii + 1] - t[i])/ii
-      }
-      yytem1 = yytem2
+    yytem1 = yytem2
+  }
+  index = rep(0, length(x))
+  for (i in 1:length(x)) {
+    index[i] = sum(t <= x[i])
+  }
+  yy = array(rep(0, (n - 1) * length(x)), dim = c(n - 1, 
+                                                  length(x)))
+  if (order == 1) {
+    for (i in 2:n) {
+      yy[i - 1, ] = (i < index - order + 1) + (i == 
+                                                 index) * (t[i + order + 1] - t[i]) * yytem2[i, 
+                                                                                             ]/(order + 1)
     }
-    index = rep(0, length(x))
-    for (i in 1:length(x)) {
-      index[i] = sum(t <= x[i])
-    }
-    yy = array(rep(0, (n - 1) * length(x)), dim = c(n - 1, 
-                                                    length(x)))
-    if (order == 1) {
+  }
+  else {
+    for (j in 1:length(x)) {
       for (i in 2:n) {
-        yy[i - 1, ] = (i < index - order + 1) + (i == 
-                                                   index) * (t[i + order + 1] - t[i]) * yytem2[i, 
-                                                                                               ]/(order + 1)
-      }
-    }
-    else {
-      for (j in 1:length(x)) {
-        for (i in 2:n) {
-          if (i < (index[j] - order + 1)) {
-            yy[i - 1, j] = 1
-          }
-          else if ((i <= index[j]) && (i >= (index[j] - 
-                                             order + 1))) {
-            yy[i - 1, j] = (t[(i + order + 1):(index[j] + 
-                                                 order + 1)] - t[i:index[j]]) %*% yytem2[i:index[j], 
-                                                                                         j]/(order + 1)
-          }
-          else {
-            yy[i - 1, j] = 0
-          }
+        if (i < (index[j] - order + 1)) {
+          yy[i - 1, j] = 1
+        }
+        else if ((i <= index[j]) && (i >= (index[j] - 
+                                           order + 1))) {
+          yy[i - 1, j] = (t[(i + order + 1):(index[j] + 
+                                               order + 1)] - t[i:index[j]]) %*% yytem2[i:index[j], 
+                                                                                       j]/(order + 1)
+        }
+        else {
+          yy[i - 1, j] = 0
         }
       }
     }
-    return(yy)
   }
-  positivepoissonrnd <- function(lambda) {
+  return(yy)
+}
+positivepoissonrnd <- function(lambda) {
+  samp = rpois(1, lambda)
+  while (samp == 0) {
     samp = rpois(1, lambda)
-    while (samp == 0) {
-      samp = rpois(1, lambda)
-    }
-    return(samp)
   }
-  beta_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
-  {
-    beta[j]<-x
-    tt<-sum(xx[,j]*x*te1)-sum(exp(xx%*%beta)*te2)-x^2/sigma.beta^2/2
-    return(tt)
-  }
-  ind_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
-    (x > -cof_range)*(x < cof_range)
+  return(samp)
+}
+beta_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
+{
+  beta[j]<-x
+  tt<-sum(xx[,j]*x*te1)-sum(exp(xx%*%beta)*te2)-x^2/sigma.beta^2/2
+  return(tt)
+}
+ind_fun<-function(x,beta,xx,sigma.beta,te1,te2,j)
+  (x > -cof_range)*(x < cof_range)
+
+
+#metropolis-hastings for cure
+# t distribution
+alpha_fun<-function(X,u,alpha,alpha_0,sigma.alpha,covG)
+{
+  Z<-cbind(1,X)
+  l<-ncol(Z)
+  alpha.new<-c(alpha+rmvt(1,sigma =covG,l))
   
+  #log prior, multivariate normal distribution
+  lpold<-dmvnorm(alpha,mean=rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
+  lpnew<-dmvnorm(alpha.new,mean = rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
   
-  #metropolis-hastings for cure
-  # t distribution
-  alpha_fun<-function(X,u,alpha,alpha_0,sigma.alpha,covG)
+  #cure rate
+  
+  piold<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
+  pinew<-exp(Z%*%alpha.new)/(1+exp(Z%*%alpha.new))
+  
+  lold<-sum(u*log(piold)+(1-u)*log(1-piold))
+  lnew<-sum(u*log(pinew)+(1-u)*log(1-pinew))
+  
+  ratio<-(lnew+lpnew)-(lold+lpold)   #random walk m-h algorithm is symestic
+  U<-runif(1)
+  
+  accept<-0
+  if(is.na(ratio)==FALSE)
   {
-    Z<-cbind(1,X)
-    l<-ncol(Z)
-    alpha.new<-c(alpha+rmvt(1,sigma =covG,l))
-    
-    #log prior, multivariate normal distribution
-    lpold<-dmvnorm(alpha,mean=rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
-    lpnew<-dmvnorm(alpha.new,mean = rep(alpha_0,l),sigma = diag(sigma.alpha,l),log = T)
-    
-    #cure rate
-    
-    piold<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
-    pinew<-exp(Z%*%alpha.new)/(1+exp(Z%*%alpha.new))
-    
-    lold<-sum(u*piold+(1-u)*(1-piold))
-    lnew<-sum(u*pinew+(1-u)*(1-pinew))
-    
-    ratio<-(lnew+lpnew)-(lold+lpold)   #random walk m-h algorithm is symestic
-    U<-runif(1)
-    
-    accept<-0
-    if(is.na(ratio)==FALSE)
+    if(log(U)<ratio)
     {
-      if(log(U)<ratio)
-      {
-        alpha<-alpha.new
-        accept<-accept+1
-      }
+      alpha<-alpha.new
+      accept<-1
     }
-     list(alpha=alpha,accept=accept)
-    }
- 
-  
-  #  hyper parameter
-  
-  cof_range=2
-  alpha_0=0                 #prior mean of alpha
-  sigma.alpha=100             #prior variance of alpha
-  covG= diag(0.1,ncol(xcov)+1)                    #proposal setting of alpha in t distribution
-  sigma.beta=100
-  a_lam=1
-  b_lam=1
+  }
+  list(alpha=alpha,accept=accept)
+}
+
+
+
+BHIsur<-function(xcov,Z,L,R,status,cof_range=2,niter=10000,burn=niter/4)
+{
   
   #  data agumentation process 
     
-   L=matrix(data$L,ncol=1)
-   R=matrix(ifelse(is.na(data$R),0,data$R),ncol = 1)
-   status=matrix(data$status,ncol = 1)
-   xcov=as.matrix(cbind(data$z1,data$z2),ncol=2)
+  # L=matrix(data$L,ncol=1)
+  # R=matrix(ifelse(is.na(data$R),0,data$R),ncol = 1)
+  # status=matrix(data$status,ncol = 1)
+  # xcov=as.matrix(cbind(data$z1,data$z2),ncol=2)
    p=ncol(xcov)
    n=nrow(L)
+   X=xcov
+   Z=cbind(1,X)
    t1=R*as.numeric(status==0)+L*as.numeric(status==1)
    t2=R*as.numeric(status==1)+L*as.numeric(status==2)
    obs=cbind(t1,t2)
@@ -142,14 +233,22 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
    bis1=Ispline(t(obs[, 1]),order,knots)  # k*n matrix
    bis2=Ispline(t(obs[, 2]),order,knots)
    bisg=Ispline(grids,order,knots)
-   lambda = rgamma(1, a_lam, rate = b_lam)
    gamcoef=matrix(rgamma(k,1,1),ncol = k)
    #beta=matrix(rep(0,p),ncol = 1)
    Lamb1=t(gamcoef%*%bis1)
    Lamb2=t(gamcoef%*%bis2)
    Lambg=t(gamcoef%*%bisg)
    
+   #  hyper parameter
    
+   cof_range=2
+   alpha_0=0                 #prior mean of alpha
+   sigma.alpha=100             #prior variance of alpha
+   covG= diag(0.1,ncol(xcov)+1)                    #proposal setting of alpha in t distribution
+   sigma.beta=100
+   a_lam=1
+   b_lam=1
+   lambda = rgamma(1, a_lam, rate = b_lam)
    
    # build the track of parameter 
   
@@ -170,8 +269,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
   
    
    
-   iter=1
-   for(iter in 1:niter)
+   for (iter in 1:niter)
    {
     
      choose<-u.track[iter,]==1  #index of u=1
@@ -235,7 +333,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
 
       }
       
-      beta.track[iter,]<-beta
+      beta.track[iter+1,]<-beta
      
       
       for(l in 1:k)
@@ -249,7 +347,7 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
         gamcoef[l] = rgamma(1, tempa, rate = tempb)
       }
      
-     gamma.track[iter,]<-gamcoef
+     gamma.track[iter+1,]<-gamcoef
      
      lam<-rgamma(1,a_lam+k, b_lam+sum(gamcoef))
    
@@ -257,9 +355,9 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
      
      # sample for alpha #
      if (iter >= 2*burn) covbG<-cov(alpha.track[(burn+1):(2*burn),])  #????
-     f<-alpha_fun(X=x_new,u=u.track[iter,],alpha=alpha.track[iter,],alpha_0,sigma.alpha,covG)
-     accepta[iter]<-f$accept
-     alpha.track[iter,]<-alpha<-f$alpha
+     f<-alpha_fun(X=xcov,u=u.track[iter,],alpha=alpha.track[iter,],alpha_0,sigma.alpha,covG)
+     accepta[iter+1]<-f$accept
+     alpha.track[iter+1,]<-alpha<-f$alpha
     
      # sample for u 
      
@@ -267,27 +365,55 @@ function(xcov,Z,L,R,status,k,cof_range,niter=10,burn=2500)
      Lamb2=t(gamcoef%*%bis2) # updata the whole Lamb1
      Lambg=t(gamcoef%*%bisg)
      
-     S.track[iter,]<-S<-exp(-Lamb1*exp(X%*%beta))
+     S.track[iter+1,]<-S<-exp(-Lamb1*exp(X%*%beta))
      cure<-exp(Z%*%alpha)/(1+exp(Z%*%alpha))
-     p_u<-cure*S/(1-cure+cure*S)
+     p_u<- cure*S/(1-cure+cure*S)
      u.temp<-rbinom(rep(1,n),rep(1,n),p_u)
      u.tem1<-ifelse(status==2,u.temp,1)
      R_max<-max(obs*(1-as.numeric(status==2))) 
      u.new<-ifelse(L>R_max,0,u.tem1)
-     u.track[iter,]<-u.new
+     u.track[iter+1,]<-u.new
      
     
     if(iter%%1000==0)
     {
       cat(paste(iter, " iterations", " have finished.\n", sep=""))
     }
- 
    }
-  list(alpha.track=alpha.track,beta.track=beta.track,gamma.track=gamma.track,
-       u.track=u.track,S.track=S.track,accept=accepta)  
-    
+   
+   f.alpha<-apply(alpha.track[burn:niter,],2,mean)
+   f.beta<-apply(beta.track[burn:niter,],2,mean)
+   f.gamma<-apply(gamma.track[burn:niter,],2,mean)
+  list(alpha=f.alpha,beta=f.beta,gamma=f.gamma,accept=accepta)  
     
 }
+apply(alpha.track[1:niter,],2,mean)
 
-### help function ####
+##  replication #
+
+alpha.rep=matrix(0,nrow = repl,ncol = ncol(xcov)+1)
+beta.rep=matrix(0,nrow=repl,ncol=ncol(xcov))
+gamma.rep=matrix(1,nrow =replr,ncol=k)
+S.rep=matrix(1,nrow = repl,ncol = n)
+
+for(k in 1:repl)
+{
+  data<-generate(n,intercept,a1,a2,b1,b2,p,v)
+  L=matrix(data$L,ncol=1)
+  R=matrix(ifelse(is.na(data$R),0,data$R),ncol = 1)
+  status=matrix(data$status,ncol = 1)
+  xcov=as.matrix(cbind(data$z1,data$z2),ncol=2)
+  result<-BHIsur(xcov=xcov,L=L, R=R, status=status)
+  alpha.rep[k,]<-result$alpha
+  beta.rep[k,]<-result$beta
+  gamma.rep[k,]<-result$gamma
+  
+}
+ apply(alpha.rep,2,mean)
+ apply(beta.rep,2,mean)
+ 
+
+## plot survival function
+
+
  
