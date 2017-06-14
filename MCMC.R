@@ -7,7 +7,7 @@ niter<-100
 burn<-niter/4
 intercept<-1  ###parameter for cure rate##
 a1<-1
-a2<--0.7
+a2<--1
 
 b1<--0.5 #### parameter for survival model### b1=-1/b1=-0.5
 b2<--1
@@ -384,7 +384,7 @@ BHIsur<-function(xcov,Z,L,R,status,cof_range=2,niter=10000,burn=niter/4)
    f.alpha<-apply(alpha.track[burn:niter,],2,mean)
    f.beta<-apply(beta.track[burn:niter,],2,mean)
    f.gamma<-apply(gamma.track[burn:niter,],2,mean)
-  list(alpha=f.alpha,beta=f.beta,gamma=f.gamma,accept=accepta)  
+  list(alpha=f.alpha,beta=f.beta,gamma=f.gamma,accept=sum(accepta)/niter)  
     
 }
 apply(alpha.track[1:niter,],2,mean)
